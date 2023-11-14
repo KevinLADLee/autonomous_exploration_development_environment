@@ -153,6 +153,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloud2) {
   pcl::PointXYZI point;
   laserCloudCrop->clear();
   int laserCloudSize = laserCloud->points.size();
+  laserCloudCrop->points.reserve(laserCloudSize);
   for (int i = 0; i < laserCloudSize; i++) {
     point = laserCloud->points[i];
 

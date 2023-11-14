@@ -10,7 +10,7 @@
   <arg name="gazebo_gui" default="false"/>
   <arg name="checkTerrainConn" default="true"/>
 
-  <include file="$(find ps3joy)/launch/ps3.launch" />
+  <!-- <include file="$(find ps3joy)/launch/ps3.launch" /> -->
 
   <include file="$(find local_planner)/launch/local_planner.launch" >
     <arg name="cameraOffsetZ" value="$(arg cameraOffsetZ)"/>
