@@ -40,7 +40,7 @@
     <param name="minPathScale" type="double" value="0.75" />
     <param name="pathScaleStep" type="double" value="0.25" />
     <param name="pathScaleBySpeed" type="bool" value="true" />
-    <param name="minPathRange" type="double" value="1.0" />
+    <param name="minPathRange" type="double" value="1.5" />
     <param name="pathRangeStep" type="double" value="0.5" />
     <param name="pathRangeBySpeed" type="bool" value="true" />
     <param name="pathCropByGoal" type="bool" value="true" />
@@ -61,7 +61,7 @@
     <param name="lookAheadDis" type="double" value="0.5" />
     <param name="yawRateGain" type="double" value="7.5" />
     <param name="stopYawRateGain" type="double" value="7.5" />
-    <param name="maxYawRate" type="double" value="90.0" />
+    <param name="maxYawRate" type="double" value="60.0" />
     <param name="maxSpeed" value="$(arg maxSpeed)" />
     <param name="maxAccel" type="double" value="2.5" />
     <param name="switchTimeThre" type="double" value="1.0" />
