@@ -9,14 +9,19 @@
   <arg name="vehicleYaw" default="0"/>
   <arg name="gazebo_gui" default="false"/>
   <arg name="checkTerrainConn" default="false"/>
+    <arg name="sensorOffsetX" default="0"/>
+    <arg name="sensorOffsetY" default="0"/>
 
-  <include file="$(find ps3joy)/launch/ps3.launch" />
+<!--   <include file="$(find ps3joy)/launch/ps3.launch" /> -->
 
-  <include file="$(find local_planner)/launch/local_planner.launch" >
-    <arg name="cameraOffsetZ" value="$(arg cameraOffsetZ)"/>
-    <arg name="goalX" value="$(arg vehicleX)"/>
-    <arg name="goalY" value="$(arg vehicleY)"/>
-  </include>
+<!--   <include file="$(find local_planner)/launch/local_planner.launch" > -->
+<!--     <arg name="cameraOffsetZ" value="$(arg cameraOffsetZ)"/> -->
+<!--     <arg name="goalX" value="$(arg vehicleX)"/> -->
+<!--     <arg name="goalY" value="$(arg vehicleY)"/> -->
+<!--   </include> -->
+  <node pkg="tf" type="static_transform_publisher" name="vehicleTransPublisher" args="-$(arg sensorOffsetX) -$(arg sensorOffsetY) 0 0 0 0 /sensor /vehicle 1000"/>
+
+  <node pkg="tf" type="static_transform_publisher" name="sensorTransPublisher" args="0 0 $(arg cameraOffsetZ) -1.5707963 0 -1.5707963 /sensor /camera 1000"/>
 
   <include file="$(find terrain_analysis)/launch/terrain_analysis.launch" />
 

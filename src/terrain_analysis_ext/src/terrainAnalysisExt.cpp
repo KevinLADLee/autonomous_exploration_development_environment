@@ -19,6 +19,7 @@
 #include <tf/transform_datatypes.h>
 
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -65,6 +66,9 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr laserCloud(new pcl::PointCloud<pcl::PointXY
 pcl::PointCloud<pcl::PointXYZI>::Ptr laserCloudCrop(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr laserCloudDwz(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr terrainCloud(new pcl::PointCloud<pcl::PointXYZI>());
+
+pcl::PointCloud<pcl::PointXYZI>::Ptr terrainCloudObs(new pcl::PointCloud<pcl::PointXYZI>());
+
 pcl::PointCloud<pcl::PointXYZI>::Ptr terrainCloudElev(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr terrainCloudLocal(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr terrainVoxelCloud[terrainVoxelNum];
@@ -202,9 +206,11 @@ int main(int argc, char** argv)
 
   ros::Publisher pubTerrainCloud = nh.advertise<sensor_msgs::PointCloud2>("/terrain_map_ext", 2);
 
-  for (int i = 0; i < terrainVoxelNum; i++)
+  ros::Publisher pubTerrainCloudObs = nh.advertise<sensor_msgs::PointCloud2>("/terrain_map_ext_obs", 2);
+
+  for (auto & i : terrainVoxelCloud)
   {
-    terrainVoxelCloud[i].reset(new pcl::PointCloud<pcl::PointXYZI>());
+    i.reset(new pcl::PointCloud<pcl::PointXYZI>());
   }
 
   downSizeFilter.setLeafSize(scanVoxelSize, scanVoxelSize, scanVoxelSize);
@@ -534,6 +540,19 @@ int main(int argc, char** argv)
       terrainCloud2.header.stamp = ros::Time().fromSec(laserCloudTime);
       terrainCloud2.header.frame_id = "map";
       pubTerrainCloud.publish(terrainCloud2);
+
+      pcl::PassThrough<pcl::PointXYZI> ptfilter (true);
+      ptfilter.setInputCloud (terrainCloudElev);
+      ptfilter.setFilterFieldName ("intensity");
+      ptfilter.setFilterLimits (0.10, 1);
+      ptfilter.filter (*terrainCloudObs);
+
+      // publish terrain obstacles
+      sensor_msgs::PointCloud2 terrainCloudObs2;
+      pcl::toROSMsg(*terrainCloudObs, terrainCloudObs2);
+      terrainCloudObs2.header.stamp = ros::Time().fromSec(laserCloudTime);
+      terrainCloudObs2.header.frame_id = "map";
+      pubTerrainCloudObs.publish(terrainCloudObs2);
     }
 
     status = ros::ok();

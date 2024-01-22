@@ -17,6 +17,7 @@
 #include <tf/transform_datatypes.h>
 
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -68,6 +69,9 @@ const int planarVoxelWidth = 51;
 int planarVoxelHalfWidth = (planarVoxelWidth - 1) / 2;
 const int planarVoxelNum = planarVoxelWidth * planarVoxelWidth;
 
+ros::Publisher crop_cloud_pub;
+ros::Publisher terrain_cloud_obs_pub;
+
 pcl::PointCloud<pcl::PointXYZI>::Ptr
     laserCloud(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr
@@ -78,6 +82,8 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr
     terrainCloud(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr
     terrainCloudElev(new pcl::PointCloud<pcl::PointXYZI>());
+pcl::PointCloud<pcl::PointXYZI>::Ptr
+    terrainCloudObs(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr terrainVoxelCloud[terrainVoxelNum];
 
 int terrainVoxelUpdateNum[terrainVoxelNum] = {0};
@@ -140,6 +146,7 @@ void odometryHandler(const nav_msgs::Odometry::ConstPtr &odom) {
 
 // registered laser scan callback function
 void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloud2) {
+//  auto start_time = std::chrono::high_resolution_clock::now();
   laserCloudTime = laserCloud2->header.stamp.toSec();
 
   if (!systemInited) {
@@ -175,6 +182,16 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloud2) {
   }
 
   newlaserCloud = true;
+  sensor_msgs::PointCloud2 crop_cloud_msg;
+  pcl::toROSMsg(*laserCloudCrop, crop_cloud_msg);
+  crop_cloud_msg.header = laserCloud2->header;
+  crop_cloud_pub.publish(crop_cloud_msg);
+
+  // ROS_INFO("laserCloudHandler took %f ms",
+  //          std::chrono::duration<float, std::milli>(
+  //              std::chrono::high_resolution_clock::now() - start_time)
+  //              .count());
+
 }
 
 // joystick callback function
@@ -239,8 +256,11 @@ int main(int argc, char **argv) {
   ros::Publisher pubLaserCloud =
       nh.advertise<sensor_msgs::PointCloud2>("/terrain_map", 2);
 
-  for (int i = 0; i < terrainVoxelNum; i++) {
-    terrainVoxelCloud[i].reset(new pcl::PointCloud<pcl::PointXYZI>());
+  crop_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>("/crop_cloud", 2);
+    terrain_cloud_obs_pub = nh.advertise<sensor_msgs::PointCloud2>("/terrain_cloud_obs", 2);
+
+  for (auto & i : terrainVoxelCloud) {
+    i.reset(new pcl::PointCloud<pcl::PointXYZI>());
   }
 
   downSizeFilter.setLeafSize(scanVoxelSize, scanVoxelSize, scanVoxelSize);
@@ -251,6 +271,7 @@ int main(int argc, char **argv) {
     ros::spinOnce();
 
     if (newlaserCloud) {
+      auto start_time = std::chrono::high_resolution_clock::now();
       newlaserCloud = false;
 
       // terrain voxel roll over
@@ -645,12 +666,31 @@ int main(int argc, char **argv) {
 
       clearingCloud = false;
 
+      // End timer
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+//        ROS_INFO("terrainAnalysis took %f ms", duration.count() / 1000.0);
+
       // publish points with elevation
       sensor_msgs::PointCloud2 terrainCloud2;
       pcl::toROSMsg(*terrainCloudElev, terrainCloud2);
       terrainCloud2.header.stamp = ros::Time().fromSec(laserCloudTime);
       terrainCloud2.header.frame_id = "map";
       pubLaserCloud.publish(terrainCloud2);
+
+        pcl::PassThrough<pcl::PointXYZI> ptfilter (true);
+        ptfilter.setInputCloud (terrainCloudElev);
+        ptfilter.setFilterFieldName ("intensity");
+        ptfilter.setFilterLimits (0.10, 1);
+        ptfilter.filter (*terrainCloudObs);
+
+        // publish terrain obstacles
+        sensor_msgs::PointCloud2 terrainCloudObs2;
+        pcl::toROSMsg(*terrainCloudObs, terrainCloudObs2);
+        terrainCloudObs2.header.stamp = ros::Time().fromSec(laserCloudTime);
+        terrainCloudObs2.header.frame_id = "map";
+        terrain_cloud_obs_pub.publish(terrainCloudObs2);
+
     }
 
     status = ros::ok();
