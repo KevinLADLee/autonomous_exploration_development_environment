@@ -1,7 +1,7 @@
 <launch>
 
   <arg name="world_name" default="indoor"/>
-  <arg name="vehicleHeight" default="0.75"/>
+  <arg name="vehicleHeight" default="0.35"/>
   <arg name="cameraOffsetZ" default="0"/>
   <arg name="vehicleX" default="0"/>
   <arg name="vehicleY" default="0"/>
@@ -10,7 +10,7 @@
   <arg name="gazebo_gui" default="false"/>
   <arg name="checkTerrainConn" default="false"/>
 
-  <include file="$(find ps3joy)/launch/ps3.launch" />
+<!--   <include file="$(find ps3joy)/launch/ps3.launch" /> -->
 
   <include file="$(find local_planner)/launch/local_planner.launch" >
     <arg name="cameraOffsetZ" value="$(arg cameraOffsetZ)"/>

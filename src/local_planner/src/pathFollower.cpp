@@ -1,7 +1,7 @@
-#include <math.h>
-#include <time.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cmath>
+#include <ctime>
+#include <cstdio>
+#include <cstdlib>
 #include <ros/ros.h>
 
 #include <message_filters/subscriber.h>
@@ -25,6 +25,11 @@
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/kdtree/kdtree_flann.h>
+
+#include "motion_msgs/RobotStatus.h"
+#include "motion_msgs/LegMotors.h"
+#include "ception_msgs/IMUEuler.h"
+#include "motion_msgs/MotionCtrl.h"
 
 using namespace std;
 
@@ -56,6 +61,7 @@ double inclThre = 45.0;
 double stopTime = 5.0;
 bool noRotAtStop = false;
 bool noRotAtGoal = true;
+bool manualMode = false;
 bool autonomyMode = false;
 double autonomySpeed = 1.0;
 double joyToSpeedDelay = 2.0;
@@ -63,7 +69,10 @@ double joyToSpeedDelay = 2.0;
 float joySpeed = 0;
 float joySpeedRaw = 0;
 float joyYaw = 0;
+float joyManualFwd = 0;
+float joyManualYaw = 0;
 int safetyStop = 0;
+int slowDown = 0;
 
 float vehicleX = 0;
 float vehicleY = 0;
@@ -90,6 +99,17 @@ int pathPointID = 0;
 bool pathInit = false;
 bool navFwd = true;
 double switchTime = 0;
+int vehicleReady = -1;
+float bodyHeight = 1.0;
+float bodyPitch = 0;
+
+float bodyLow = 0.28;
+float bodyHigh = 0.52;
+float bodySpeedGain = 0.5;
+float bodyMaxSpeed = 0.2;
+
+float pitchRateGain = 2.0;
+float pitchMaxRate = 0.5;
 
 nav_msgs::Path path;
 
@@ -154,10 +174,19 @@ void joystickHandler(const sensor_msgs::Joy::ConstPtr& joy)
     joyYaw = 0;
   }
 
+  joyManualFwd = joy->axes[4];
+  joyManualYaw = joy->axes[3];
+
   if (joy->axes[2] > -0.1) {
     autonomyMode = false;
   } else {
     autonomyMode = true;
+  }
+
+  if (joy->axes[5] > -0.1) {
+    manualMode = false;
+  } else {
+    manualMode = true;
   }
 }
 
@@ -176,6 +205,29 @@ void speedHandler(const std_msgs::Float32::ConstPtr& speed)
 void stopHandler(const std_msgs::Int8::ConstPtr& stop)
 {
   safetyStop = stop->data;
+}
+
+void slowDownHandler(const std_msgs::Int8::ConstPtr& slow)
+{
+  slowDown = slow->data;
+}
+
+void robotStatusHandler(const motion_msgs::RobotStatus::ConstPtr&  status)
+{
+  if (status->robot_mode_msg == 3) vehicleReady = 1;
+  else vehicleReady = 0;
+
+  //printf ("Ctrl mode %d, Robot mode %d\n", status->ctrl_mode_msg, status->robot_mode_msg);
+}
+
+void motorStatusHandler(const motion_msgs::LegMotors::ConstPtr& status)
+{
+  bodyHeight = (status->left_leg_length + status->right_leg_length - bodyLow) / (bodyHigh - bodyLow);
+}
+
+void imuHandler(const ception_msgs::IMUEuler::ConstPtr& status)
+{
+  bodyPitch = status->pitch;
 }
 
 int main(int argc, char** argv)
@@ -213,19 +265,51 @@ int main(int argc, char** argv)
   nhPrivate.getParam("autonomySpeed", autonomySpeed);
   nhPrivate.getParam("joyToSpeedDelay", joyToSpeedDelay);
 
-  ros::Subscriber subOdom = nh.subscribe<nav_msgs::Odometry> ("/state_estimation", 5, odomHandler);
+  auto subOdom = nh.subscribe<nav_msgs::Odometry>("/state_estimation", 5, odomHandler);
 
-  ros::Subscriber subPath = nh.subscribe<nav_msgs::Path> ("/path", 5, pathHandler);
+  auto subPath = nh.subscribe<nav_msgs::Path>("/path", 5, pathHandler);
 
-  ros::Subscriber subJoystick = nh.subscribe<sensor_msgs::Joy> ("/joy", 5, joystickHandler);
+  auto subJoystick = nh.subscribe<sensor_msgs::Joy>("/joy", 5, joystickHandler);
 
-  ros::Subscriber subSpeed = nh.subscribe<std_msgs::Float32> ("/speed", 5, speedHandler);
+  auto subSpeed = nh.subscribe<std_msgs::Float32>("/speed", 5, speedHandler);
 
-  ros::Subscriber subStop = nh.subscribe<std_msgs::Int8> ("/stop", 5, stopHandler);
+  auto subStop = nh.subscribe<std_msgs::Int8>("/stop", 5, stopHandler);
 
-  ros::Publisher pubSpeed = nh.advertise<geometry_msgs::TwistStamped> ("/cmd_vel", 5);
+  auto subSlowDown = nh.subscribe<std_msgs::Int8>("/slow_down", 5, slowDownHandler);
+
+  auto subRobotStatus = nh.subscribe<motion_msgs::RobotStatus>("diablo/sensor/Body_state", 5, robotStatusHandler);
+
+  auto subMotorStatus = nh.subscribe<motion_msgs::LegMotors>("diablo/sensor/Motors", 5, motorStatusHandler);
+
+  auto subIMU = nh.subscribe<ception_msgs::IMUEuler>("/diablo/sensor/ImuEuler", 5, imuHandler);
+
+  auto pubSpeed = nh.advertise<geometry_msgs::TwistStamped>("/cmd_vel", 5);
   geometry_msgs::TwistStamped cmd_vel;
   cmd_vel.header.frame_id = "vehicle";
+
+  auto pubMotionCtrl = nh.advertise<motion_msgs::MotionCtrl>("diablo/MotionCmd", 5);
+  motion_msgs::MotionCtrl ctrl_msg;
+
+  auto pubClearing = nh.advertise<std_msgs::Float32>("/map_clearing", 5);
+  std_msgs::Float32 clear_msg;
+  clear_msg.data = 8.0;
+
+  auto pubClearingExt = nh.advertise<std_msgs::Float32>("/cloud_clearing", 5);
+  std_msgs::Float32 clear_msg_ext;
+  clear_msg_ext.data = 30.0;
+
+  ctrl_msg.value.forward = 0;
+  ctrl_msg.value.left = 0;
+  ctrl_msg.value.up = 0;
+  ctrl_msg.value.roll = 0;
+  ctrl_msg.value.pitch = 0;
+  ctrl_msg.value.leg_split = 0;
+  ctrl_msg.mode.pitch_ctrl_mode = true;
+  ctrl_msg.mode.roll_ctrl_mode = false;
+  ctrl_msg.mode.height_ctrl_mode = true;
+  ctrl_msg.mode.stand_mode = true;
+  ctrl_msg.mode.jump_mode = false;
+  ctrl_msg.mode.split_mode = false;
 
   if (autonomyMode) {
     joySpeed = autonomySpeed / maxSpeed;
@@ -234,16 +318,17 @@ int main(int argc, char** argv)
     else if (joySpeed > 1.0) joySpeed = 1.0;
   }
 
+  int ctrlInitFrameCount = 150;
   ros::Rate rate(100);
   bool status = ros::ok();
   while (status) {
     ros::spinOnce();
 
     if (pathInit) {
-      float vehicleXRel = cos(vehicleYawRec) * (vehicleX - vehicleXRec) 
-                        + sin(vehicleYawRec) * (vehicleY - vehicleYRec);
-      float vehicleYRel = -sin(vehicleYawRec) * (vehicleX - vehicleXRec) 
-                        + cos(vehicleYawRec) * (vehicleY - vehicleYRec);
+      float vehicleXRel = cos(vehicleYawRec) * (vehicleX - vehicleXRec)
+          + sin(vehicleYawRec) * (vehicleY - vehicleYRec);
+      float vehicleYRel = -sin(vehicleYawRec) * (vehicleX - vehicleXRec)
+          + cos(vehicleYawRec) * (vehicleY - vehicleYRec);
 
       int pathSize = path.poses.size();
       float endDisX = path.poses[pathSize - 1].pose.position.x - vehicleXRel;
@@ -310,8 +395,8 @@ int main(int argc, char** argv)
       }
 
       float joySpeed3 = joySpeed2;
-      if (odomTime < slowInitTime + slowTime1 && slowInitTime > 0) joySpeed3 *= slowRate1;
-      else if (odomTime < slowInitTime + slowTime1 + slowTime2 && slowInitTime > 0) joySpeed3 *= slowRate2;
+      if (odomTime < slowInitTime + slowTime1 && slowInitTime > 0 || slowDown == 1) joySpeed3 *= slowRate1;
+      else if (odomTime < slowInitTime + slowTime1 + slowTime2 && slowInitTime > 0 || slowDown == 2) joySpeed3 *= slowRate2;
 
       if (fabs(dirDiff) < dirDiffThre && dis > stopDisThre) {
         if (vehicleSpeed < joySpeed3) vehicleSpeed += maxAccel / 100.0;
@@ -335,7 +420,46 @@ int main(int argc, char** argv)
         if (fabs(vehicleSpeed) <= maxAccel / 100.0) cmd_vel.twist.linear.x = 0;
         else cmd_vel.twist.linear.x = vehicleSpeed;
         cmd_vel.twist.angular.z = vehicleYawRate;
+
+        if (manualMode) {
+          cmd_vel.twist.linear.x = maxSpeed * joyManualFwd;
+          cmd_vel.twist.angular.z = maxYawRate * PI / 180.0 * joyManualYaw;
+        }
+
         pubSpeed.publish(cmd_vel);
+
+        if (vehicleReady != 0) {
+          ctrl_msg.value.forward = cmd_vel.twist.linear.x;
+          ctrl_msg.value.left = cmd_vel.twist.angular.z;
+
+          float desiredHeight = 1.0;
+          if (slowDown == 1) desiredHeight = 0;
+          else if (slowDown == 2) desiredHeight = 0.5;
+
+          ctrl_msg.value.up = bodySpeedGain * (desiredHeight - bodyHeight);
+          if (ctrl_msg.value.up < -bodyMaxSpeed) ctrl_msg.value.up = -bodyMaxSpeed;
+          else if (ctrl_msg.value.up > bodyMaxSpeed) ctrl_msg.value.up = bodyMaxSpeed;
+
+          ctrl_msg.value.pitch = -pitchRateGain * bodyPitch;
+          if (ctrl_msg.value.pitch < -pitchMaxRate) ctrl_msg.value.pitch = -pitchMaxRate;
+          else if (ctrl_msg.value.pitch > pitchMaxRate) ctrl_msg.value.pitch = pitchMaxRate;
+        } else {
+          ctrl_msg.value.forward = 0;
+          ctrl_msg.value.left = 0;
+          ctrl_msg.value.up = 0;
+          ctrl_msg.value.pitch = 0;
+
+          pubClearing.publish(clear_msg);
+          pubClearingExt.publish(clear_msg_ext);
+        }
+
+        ctrl_msg.mode_mark = false;
+        if (ctrlInitFrameCount > 0) {
+          ctrl_msg.mode_mark = true;
+          ctrlInitFrameCount--;
+        }
+
+        pubMotionCtrl.publish(ctrl_msg);
 
         pubSkipCount = pubSkipNum;
       }

@@ -4,10 +4,10 @@
 
   <node pkg="terrain_analysis_ext" type="terrainAnalysisExt" name="terrainAnalysisExt" output="screen" required="true">
     <param name="scanVoxelSize" type="double" value="0.1" />
-    <param name="decayTime" type="double" value="10.0" />
-    <param name="noDecayDis" type="double" value="0" />
+    <param name="decayTime" type="double" value="4.0" />
+    <param name="noDecayDis" type="double" value="0.0" />
     <param name="clearingDis" type="double" value="30.0" />
-    <param name="useSorting" type="bool" value="false" />
+    <param name="useSorting" type="bool" value="true" />
     <param name="quantileZ" type="double" value="0.1" />
     <param name="vehicleHeight" type="double" value="1.5" />
     <param name="voxelPointUpdateThre" type="int" value="100" />

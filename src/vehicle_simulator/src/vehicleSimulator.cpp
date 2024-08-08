@@ -18,8 +18,9 @@
 #include <sensor_msgs/Joy.h>
 #include <visualization_msgs/Marker.h>
 
-#include <tf/transform_datatypes.h>
-#include <tf/transform_broadcaster.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2/transform_datatypes.h>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -94,7 +95,7 @@ int odomRecIDPointer = 0;
 
 pcl::VoxelGrid<pcl::PointXYZI> terrainDwzFilter;
 
-ros::Publisher* pubScanPointer = NULL;
+ros::Publisher pubScan;
 
 void scanHandler(const sensor_msgs::PointCloud2::ConstPtr& scanIn)
 {
@@ -113,7 +114,7 @@ void scanHandler(const sensor_msgs::PointCloud2::ConstPtr& scanIn)
     return;
   }
   while (odomTimeStack[(odomRecIDPointer + 1) % stackNum] < scanTime &&
-         odomRecIDPointer != (odomSendIDPointer + 1) % stackNum)
+      odomRecIDPointer != (odomSendIDPointer + 1) % stackNum)
   {
     odomRecIDPointer = (odomRecIDPointer + 1) % stackNum;
   }
@@ -175,7 +176,7 @@ void scanHandler(const sensor_msgs::PointCloud2::ConstPtr& scanIn)
   pcl::toROSMsg(*scanData, scanData2);
   scanData2.header.stamp = ros::Time().fromSec(odomRecTime);
   scanData2.header.frame_id = "map";
-  pubScanPointer->publish(scanData2);
+  pubScan.publish(scanData2);
 }
 
 void terrainCloudHandler(const sensor_msgs::PointCloud2ConstPtr& terrainCloud2)
@@ -261,7 +262,7 @@ void terrainCloudHandler(const sensor_msgs::PointCloud2ConstPtr& terrainCloud2)
       matB.at<float>(i, 0) = point.z - elevMean;
 
       if (fabs(matA.at<float>(i, 0) * matX.at<float>(0, 0) + matA.at<float>(i, 1) * matX.at<float>(1, 0) -
-               matB.at<float>(i, 0)) > InclFittingThre &&
+          matB.at<float>(i, 0)) > InclFittingThre &&
           iterCount > 0)
       {
         matA.at<float>(i, 0) = 0;
@@ -306,26 +307,24 @@ int main(int argc, char** argv)
   ros::NodeHandle nh;
   ros::NodeHandle nhPrivate = ros::NodeHandle("~");
 
-  nhPrivate.getParam("use_gazebo_time", use_gazebo_time);
-  nhPrivate.getParam("cameraOffsetZ", cameraOffsetZ);
-  nhPrivate.getParam("sensorOffsetX", sensorOffsetX);
-  nhPrivate.getParam("sensorOffsetY", sensorOffsetY);
-  nhPrivate.getParam("vehicleHeight", vehicleHeight);
-  nhPrivate.getParam("vehicleX", vehicleX);
-  nhPrivate.getParam("vehicleY", vehicleY);
-  nhPrivate.getParam("vehicleZ", vehicleZ);
-  nhPrivate.getParam("terrainZ", terrainZ);
-  nhPrivate.getParam("vehicleYaw", vehicleYaw);
-  nhPrivate.getParam("terrainVoxelSize", terrainVoxelSize);
-  nhPrivate.getParam("groundHeightThre", groundHeightThre);
-  nhPrivate.getParam("adjustZ", adjustZ);
-  nhPrivate.getParam("terrainRadiusZ", terrainRadiusZ);
-  nhPrivate.getParam("minTerrainPointNumZ", minTerrainPointNumZ);
-  nhPrivate.getParam("adjustIncl", adjustIncl);
-  nhPrivate.getParam("terrainRadiusIncl", terrainRadiusIncl);
-  nhPrivate.getParam("minTerrainPointNumIncl", minTerrainPointNumIncl);
-  nhPrivate.getParam("InclFittingThre", InclFittingThre);
-  nhPrivate.getParam("maxIncl", maxIncl);
+  nhPrivate.param("sensorOffsetX", sensorOffsetX);
+  nhPrivate.param("sensorOffsetY", sensorOffsetY);
+  nhPrivate.param("vehicleHeight", vehicleHeight);
+  nhPrivate.param("vehicleX", vehicleX);
+  nhPrivate.param("vehicleY", vehicleY);
+  nhPrivate.param("vehicleZ", vehicleZ);
+  nhPrivate.param("terrainZ", terrainZ);
+  nhPrivate.param("vehicleYaw", vehicleYaw);
+  nhPrivate.param("terrainVoxelSize", terrainVoxelSize);
+  nhPrivate.param("groundHeightThre", groundHeightThre);
+  nhPrivate.param("adjustZ", adjustZ);
+  nhPrivate.param("terrainRadiusZ", terrainRadiusZ);
+  nhPrivate.param("minTerrainPointNumZ", minTerrainPointNumZ);
+  nhPrivate.param("adjustIncl", adjustIncl);
+  nhPrivate.param("terrainRadiusIncl", terrainRadiusIncl);
+  nhPrivate.param("minTerrainPointNumIncl", minTerrainPointNumIncl);
+  nhPrivate.param("InclFittingThre", InclFittingThre);
+  nhPrivate.param("maxIncl", maxIncl);
 
   ros::Subscriber subScan = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_points", 2, scanHandler);
 
@@ -339,10 +338,10 @@ int main(int argc, char** argv)
   odomData.header.frame_id = "map";
   odomData.child_frame_id = "sensor";
 
-  tf::TransformBroadcaster tfBroadcaster;
-  tf::StampedTransform odomTrans;
+  auto tfBroadcaster = std::make_unique<tf2_ros::TransformBroadcaster>();
+  tf2::Stamped<tf2::Transform> odomTrans;
+  geometry_msgs::TransformStamped transformTfGeom ;
   odomTrans.frame_id_ = "map";
-  odomTrans.child_frame_id_ = "sensor";
 
   ros::Publisher pubModelState = nh.advertise<gazebo_msgs::ModelState>("/gazebo/set_model_state", 5);
   gazebo_msgs::ModelState cameraState;
@@ -352,8 +351,7 @@ int main(int argc, char** argv)
   gazebo_msgs::ModelState robotState;
   robotState.model_name = "robot";
 
-  ros::Publisher pubScan = nh.advertise<sensor_msgs::PointCloud2>("/registered_scan", 2);
-  pubScanPointer = &pubScan;
+  pubScan = nh.advertise<sensor_msgs::PointCloud2>("/registered_scan", 2);
 
   terrainDwzFilter.setLeafSize(terrainVoxelSize, terrainVoxelSize, terrainVoxelSize);
 
@@ -378,28 +376,18 @@ int main(int argc, char** argv)
       vehicleYaw += 2 * PI;
 
     vehicleX += 0.005 * cos(vehicleYaw) * vehicleSpeed +
-                0.005 * vehicleYawRate * (-sin(vehicleYaw) * sensorOffsetX - cos(vehicleYaw) * sensorOffsetY);
+        0.005 * vehicleYawRate * (-sin(vehicleYaw) * sensorOffsetX - cos(vehicleYaw) * sensorOffsetY);
     vehicleY += 0.005 * sin(vehicleYaw) * vehicleSpeed +
-                0.005 * vehicleYawRate * (cos(vehicleYaw) * sensorOffsetX - sin(vehicleYaw) * sensorOffsetY);
+        0.005 * vehicleYawRate * (cos(vehicleYaw) * sensorOffsetX - sin(vehicleYaw) * sensorOffsetY);
     vehicleZ = terrainZ + vehicleHeight;
 
-    ros::Time odomTimeRec = odomTime;
     odomTime = ros::Time::now();
-    if (odomTime == odomTimeRec) odomTime += ros::Duration(0.005);
-
-    odomSendIDPointer = (odomSendIDPointer + 1) % stackNum;
-    odomTimeStack[odomSendIDPointer] = odomTime.toSec();
-    vehicleXStack[odomSendIDPointer] = vehicleX;
-    vehicleYStack[odomSendIDPointer] = vehicleY;
-    vehicleZStack[odomSendIDPointer] = vehicleZ;
-    vehicleRollStack[odomSendIDPointer] = vehicleRoll;
-    vehiclePitchStack[odomSendIDPointer] = vehiclePitch;
-    vehicleYawStack[odomSendIDPointer] = vehicleYaw;
-    terrainRollStack[odomSendIDPointer] = terrainRoll;
-    terrainPitchStack[odomSendIDPointer] = terrainPitch;
 
     // publish 200Hz odometry messages
-    geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(vehicleRoll, vehiclePitch, vehicleYaw);
+    tf2::Quaternion quat_tf;
+    quat_tf.setRPY(vehicleRoll, vehiclePitch, vehicleYaw);
+    geometry_msgs::Quaternion geoQuat;
+    tf2::convert(quat_tf, geoQuat);
 
     odomData.header.stamp = odomTime;
     odomData.pose.pose.orientation = geoQuat;
@@ -414,25 +402,24 @@ int main(int argc, char** argv)
     pubVehicleOdom.publish(odomData);
 
     // publish 200Hz tf messages
-    odomTrans.stamp_ = odomTime;
-    odomTrans.setRotation(tf::Quaternion(geoQuat.x, geoQuat.y, geoQuat.z, geoQuat.w));
-    odomTrans.setOrigin(tf::Vector3(vehicleX, vehicleY, vehicleZ));
-    tfBroadcaster.sendTransform(odomTrans);
+    odomTrans.setRotation(tf2::Quaternion(geoQuat.x, geoQuat.y, geoQuat.z, geoQuat.w));
+    odomTrans.setOrigin(tf2::Vector3(vehicleX, vehicleY, vehicleZ));
+    transformTfGeom = tf2::toMsg(odomTrans);
+    transformTfGeom.child_frame_id = "sensor";
+    transformTfGeom.header.stamp = odomTime;
+    tfBroadcaster->sendTransform(transformTfGeom);
 
-    // publish 200Hz Gazebo model state messages (this is for Gazebo simulation)
-    cameraState.pose.orientation = geoQuat;
-    cameraState.pose.position.x = vehicleX;
-    cameraState.pose.position.y = vehicleY;
-    cameraState.pose.position.z = vehicleZ + cameraOffsetZ;
-    pubModelState.publish(cameraState);
-
+    // publish 200Hz Unity model state messages (this is for Unity Simulation)
+//    robotState.header.stamp = odomTime;
     robotState.pose.orientation = geoQuat;
     robotState.pose.position.x = vehicleX;
     robotState.pose.position.y = vehicleY;
     robotState.pose.position.z = vehicleZ;
     pubModelState.publish(robotState);
 
-    geoQuat = tf::createQuaternionMsgFromRollPitchYaw(terrainRoll, terrainPitch, 0);
+    tf2::Quaternion quad_terrain_tf;
+    quad_terrain_tf.setRPY(terrainRoll, terrainPitch, 0);
+    tf2::convert(quad_terrain_tf, geoQuat);
 
     lidarState.pose.orientation = geoQuat;
     lidarState.pose.position.x = vehicleX;

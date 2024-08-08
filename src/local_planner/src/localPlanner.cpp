@@ -21,11 +21,14 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/kdtree/kdtree_flann.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/kdtree/kdtree_flann.h>
+#include <std_msgs/Int8.h>
 
 using namespace std;
 
@@ -47,8 +50,8 @@ bool checkRotObstacle = false;
 double adjacentRange = 3.5;
 double obstacleHeightThre = 0.2;
 double groundHeightThre = 0.1;
-double costHeightThre = 0.1;
-double costScore = 0.02;
+double costHeightThre1 = 0.15;
+double costHeightThre2 = 0.1;
 bool useCost = false;
 const int laserCloudStackNum = 1;
 int laserCloudCount = 0;
@@ -71,7 +74,12 @@ bool autonomyMode = false;
 double autonomySpeed = 1.0;
 double joyToSpeedDelay = 2.0;
 double joyToCheckObstacleDelay = 5.0;
+double freezeAng = 90.0;
+double freezeTime = 2.0;
+double freezeStartTime = 0;
+int freezeStatus = 0;
 double goalClearRange = 0.5;
+double goalBehindRange = 0.8;
 double goalX = 0;
 double goalY = 0;
 
@@ -111,6 +119,8 @@ float endDirPathList[pathNum] = {0};
 int clearPathList[36 * pathNum] = {0};
 float pathPenaltyList[36 * pathNum] = {0};
 float clearPathPerGroupScore[36 * groupNum] = {0};
+int clearPathPerGroupNum[36 * groupNum] = {0};
+float pathPenaltyPerGroupScore[36 * groupNum] = {0};
 std::vector<int> correspondences[gridVoxelNum];
 
 bool newLaserCloud = false;
@@ -190,7 +200,7 @@ void terrainCloudHandler(const sensor_msgs::PointCloud2ConstPtr& terrainCloud2)
       float pointZ = point.z;
 
       float dis = sqrt((pointX - vehicleX) * (pointX - vehicleX) + (pointY - vehicleY) * (pointY - vehicleY));
-      if (dis < adjacentRange && (point.intensity > obstacleHeightThre || useCost)) {
+      if (dis < adjacentRange && (point.intensity > obstacleHeightThre || (point.intensity > groundHeightThre && useCost))) {
         point.x = pointX;
         point.y = pointY;
         point.z = pointZ;
@@ -320,7 +330,7 @@ int readPlyHeader(FILE *filePtr)
   while (strCur != "end_header") {
     val = fscanf(filePtr, "%s", str);
     if (val != 1) {
-      printf ("\nError reading input files, exit.\n\n");
+      ROS_INFO("Error reading input files, exit.");
       exit(1);
     }
 
@@ -330,7 +340,7 @@ int readPlyHeader(FILE *filePtr)
     if (strCur == "vertex" && strLast == "element") {
       val = fscanf(filePtr, "%d", &pointNum);
       if (val != 1) {
-        printf ("\nError reading input files, exit.\n\n");
+        ROS_INFO("Error reading input files, exit.");
         exit(1);
       }
     }
@@ -345,7 +355,7 @@ void readStartPaths()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    printf ("\nCannot read input files, exit.\n\n");
+    ROS_INFO("Cannot read input files, exit.");
     exit(1);
   }
 
@@ -360,8 +370,8 @@ void readStartPaths()
     val4 = fscanf(filePtr, "%d", &groupID);
 
     if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1) {
-      printf ("\nError reading input files, exit.\n\n");
-        exit(1);
+      ROS_INFO("Error reading input files, exit.");
+      exit(1);
     }
 
     if (groupID >= 0 && groupID < groupNum) {
@@ -379,7 +389,7 @@ void readPaths()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    printf ("\nCannot read input files, exit.\n\n");
+    ROS_INFO("Cannot read input files, exit.");
     exit(1);
   }
 
@@ -397,8 +407,8 @@ void readPaths()
     val5 = fscanf(filePtr, "%f", &point.intensity);
 
     if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1 || val5 != 1) {
-      printf ("\nError reading input files, exit.\n\n");
-        exit(1);
+      ROS_INFO("Error reading input files, exit.");
+      exit(1);
     }
 
     if (pathID >= 0 && pathID < pathNum) {
@@ -420,12 +430,12 @@ void readPathList()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    printf ("\nCannot read input files, exit.\n\n");
+    ROS_INFO("Cannot read input files, exit.");
     exit(1);
   }
 
   if (pathNum != readPlyHeader(filePtr)) {
-    printf ("\nIncorrect path number, exit.\n\n");
+    ROS_INFO("Incorrect path number, exit.");
     exit(1);
   }
 
@@ -439,8 +449,8 @@ void readPathList()
     val5 = fscanf(filePtr, "%d", &groupID);
 
     if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1 || val5 != 1) {
-      printf ("\nError reading input files, exit.\n\n");
-        exit(1);
+      ROS_INFO("Error reading input files, exit.");
+      exit(1);
     }
 
     if (pathID >= 0 && pathID < pathNum && groupID >= 0 && groupID < groupNum) {
@@ -510,8 +520,8 @@ int main(int argc, char** argv)
   nhPrivate.getParam("adjacentRange", adjacentRange);
   nhPrivate.getParam("obstacleHeightThre", obstacleHeightThre);
   nhPrivate.getParam("groundHeightThre", groundHeightThre);
-  nhPrivate.getParam("costHeightThre", costHeightThre);
-  nhPrivate.getParam("costScore", costScore);
+  nhPrivate.getParam("costHeightThre1", costHeightThre1);
+  nhPrivate.getParam("costHeightThre2", costHeightThre2);
   nhPrivate.getParam("useCost", useCost);
   nhPrivate.getParam("pointPerPathThre", pointPerPathThre);
   nhPrivate.getParam("minRelZ", minRelZ);
@@ -532,41 +542,44 @@ int main(int argc, char** argv)
   nhPrivate.getParam("autonomySpeed", autonomySpeed);
   nhPrivate.getParam("joyToSpeedDelay", joyToSpeedDelay);
   nhPrivate.getParam("joyToCheckObstacleDelay", joyToCheckObstacleDelay);
+  nhPrivate.getParam("freezeAng", freezeAng);
+  nhPrivate.getParam("freezeTime", freezeTime);
   nhPrivate.getParam("goalClearRange", goalClearRange);
+  nhPrivate.getParam("goalBehindRange", goalBehindRange);
   nhPrivate.getParam("goalX", goalX);
   nhPrivate.getParam("goalY", goalY);
 
-  ros::Subscriber subOdometry = nh.subscribe<nav_msgs::Odometry>
-                                ("/state_estimation", 5, odometryHandler);
+  auto subOdometry = nh.subscribe<nav_msgs::Odometry>("/state_estimation", 5, odometryHandler);
 
-  ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>
-                                  ("/registered_scan", 5, laserCloudHandler);
+  auto subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>("/registered_scan", 5, laserCloudHandler);
 
-  ros::Subscriber subTerrainCloud = nh.subscribe<sensor_msgs::PointCloud2>
-                                    ("/terrain_map", 5, terrainCloudHandler);
+  auto subTerrainCloud = nh.subscribe<sensor_msgs::PointCloud2>("/terrain_map", 5, terrainCloudHandler);
 
-  ros::Subscriber subJoystick = nh.subscribe<sensor_msgs::Joy> ("/joy", 5, joystickHandler);
+  auto subJoystick = nh.subscribe<sensor_msgs::Joy>("/joy", 5, joystickHandler);
 
-  ros::Subscriber subGoal = nh.subscribe<geometry_msgs::PointStamped> ("/way_point", 5, goalHandler);
+  auto subGoal = nh.subscribe<geometry_msgs::PointStamped> ("/way_point", 5, goalHandler);
 
-  ros::Subscriber subSpeed = nh.subscribe<std_msgs::Float32> ("/speed", 5, speedHandler);
+  auto subSpeed = nh.subscribe<std_msgs::Float32>("/speed", 5, speedHandler);
 
-  ros::Subscriber subBoundary = nh.subscribe<geometry_msgs::PolygonStamped> ("/navigation_boundary", 5, boundaryHandler);
+  auto subBoundary = nh.subscribe<geometry_msgs::PolygonStamped>("/navigation_boundary", 5, boundaryHandler);
 
-  ros::Subscriber subAddedObstacles = nh.subscribe<sensor_msgs::PointCloud2> ("/added_obstacles", 5, addedObstaclesHandler);
+  auto subAddedObstacles = nh.subscribe<sensor_msgs::PointCloud2>("/added_obstacles", 5, addedObstaclesHandler);
 
-  ros::Subscriber subCheckObstacle = nh.subscribe<std_msgs::Bool> ("/check_obstacle", 5, checkObstacleHandler);
+  auto subCheckObstacle = nh.subscribe<std_msgs::Bool>("/check_obstacle", 5, checkObstacleHandler);
 
-  ros::Publisher pubPath = nh.advertise<nav_msgs::Path> ("/path", 5);
+  auto pubSlowDown = nh.advertise<std_msgs::Int8> ("/slow_down", 5);
+  std_msgs::Int8 slow;
+
+  auto pubPath = nh.advertise<nav_msgs::Path>("/path", 5);
   nav_msgs::Path path;
 
-  #if PLOTPATHSET == 1
-  ros::Publisher pubFreePaths = nh.advertise<sensor_msgs::PointCloud2> ("/free_paths", 2);
-  #endif
+#if PLOTPATHSET == 1
+  auto pubFreePaths = nh.advertise<sensor_msgs::PointCloud2>("/free_paths", 2);
+#endif
 
-  //ros::Publisher pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2> ("/stacked_scans", 2);
+  //auto pubLaserCloud = nh->create_publisher<sensor_msgs::PointCloud2> ("/stacked_scans", 2);
 
-  printf ("\nReading path files.\n");
+  ROS_INFO("Reading path files.");
 
   if (autonomyMode) {
     joySpeed = autonomySpeed / maxSpeed;
@@ -581,11 +594,11 @@ int main(int argc, char** argv)
   for (int i = 0; i < groupNum; i++) {
     startPaths[i].reset(new pcl::PointCloud<pcl::PointXYZ>());
   }
-  #if PLOTPATHSET == 1
+#if PLOTPATHSET == 1
   for (int i = 0; i < pathNum; i++) {
     paths[i].reset(new pcl::PointCloud<pcl::PointXYZI>());
   }
-  #endif
+#endif
   for (int i = 0; i < gridVoxelNum; i++) {
     correspondences[i].resize(0);
   }
@@ -594,13 +607,13 @@ int main(int argc, char** argv)
   terrainDwzFilter.setLeafSize(terrainVoxelSize, terrainVoxelSize, terrainVoxelSize);
 
   readStartPaths();
-  #if PLOTPATHSET == 1
+#if PLOTPATHSET == 1
   readPaths();
-  #endif
+#endif
   readPathList();
   readCorrespondences();
 
-  printf ("\nInitialization complete.\n\n");
+  ROS_INFO("Initialization complete.");
 
   ros::Rate rate(100);
   bool status = ros::ok();
@@ -628,10 +641,6 @@ int main(int argc, char** argv)
         *plannerCloud = *terrainCloudDwz;
       }
 
-      float sinVehicleRoll = sin(vehicleRoll);
-      float cosVehicleRoll = cos(vehicleRoll);
-      float sinVehiclePitch = sin(vehiclePitch);
-      float cosVehiclePitch = cos(vehiclePitch);
       float sinVehicleYaw = sin(vehicleYaw);
       float cosVehicleYaw = cos(vehicleYaw);
 
@@ -656,10 +665,10 @@ int main(int argc, char** argv)
 
       int boundaryCloudSize = boundaryCloud->points.size();
       for (int i = 0; i < boundaryCloudSize; i++) {
-        point.x = ((boundaryCloud->points[i].x - vehicleX) * cosVehicleYaw 
-                + (boundaryCloud->points[i].y - vehicleY) * sinVehicleYaw);
-        point.y = (-(boundaryCloud->points[i].x - vehicleX) * sinVehicleYaw 
-                + (boundaryCloud->points[i].y - vehicleY) * cosVehicleYaw);
+        point.x = ((boundaryCloud->points[i].x - vehicleX) * cosVehicleYaw
+            + (boundaryCloud->points[i].y - vehicleY) * sinVehicleYaw);
+        point.y = (-(boundaryCloud->points[i].x - vehicleX) * sinVehicleYaw
+            + (boundaryCloud->points[i].y - vehicleY) * cosVehicleYaw);
         point.z = boundaryCloud->points[i].z;
         point.intensity = boundaryCloud->points[i].intensity;
 
@@ -671,10 +680,10 @@ int main(int argc, char** argv)
 
       int addedObstaclesSize = addedObstacles->points.size();
       for (int i = 0; i < addedObstaclesSize; i++) {
-        point.x = ((addedObstacles->points[i].x - vehicleX) * cosVehicleYaw 
-                + (addedObstacles->points[i].y - vehicleY) * sinVehicleYaw);
-        point.y = (-(addedObstacles->points[i].x - vehicleX) * sinVehicleYaw 
-                + (addedObstacles->points[i].y - vehicleY) * cosVehicleYaw);
+        point.x = ((addedObstacles->points[i].x - vehicleX) * cosVehicleYaw
+            + (addedObstacles->points[i].y - vehicleY) * sinVehicleYaw);
+        point.y = (-(addedObstacles->points[i].x - vehicleX) * sinVehicleYaw
+            + (addedObstacles->points[i].y - vehicleY) * cosVehicleYaw);
         point.z = addedObstacles->points[i].z;
         point.intensity = addedObstacles->points[i].intensity;
 
@@ -696,10 +705,31 @@ int main(int argc, char** argv)
         relativeGoalDis = sqrt(relativeGoalX * relativeGoalX + relativeGoalY * relativeGoalY);
         joyDir = atan2(relativeGoalY, relativeGoalX) * 180 / PI;
 
-        if (!twoWayDrive) {
-          if (joyDir > 90.0) joyDir = 90.0;
-          else if (joyDir < -90.0) joyDir = -90.0;
+        if (fabs(joyDir) > freezeAng && relativeGoalDis < goalBehindRange) {
+          relativeGoalDis = 0;
+          joyDir = 0;
         }
+
+        if (fabs(joyDir) > freezeAng && freezeStatus == 0) {
+          freezeStartTime = odomTime;
+          freezeStatus = 1;
+        } else if (odomTime - freezeStartTime > freezeTime && freezeStatus == 1) {
+          freezeStatus = 2;
+        } else if (fabs(joyDir) <= freezeAng && freezeStatus == 2) {
+          freezeStatus = 0;
+        }
+
+        if (!twoWayDrive) {
+          if (joyDir > 95.0) joyDir = 95.0;
+          else if (joyDir < -95.0) joyDir = -95.0;
+        }
+      } else {
+        freezeStatus = 0;
+      }
+
+      if (freezeStatus == 1 && autonomyMode) {
+        relativeGoalDis = 0;
+        joyDir = 0;
       }
 
       bool pathFound = false;
@@ -714,6 +744,8 @@ int main(int argc, char** argv)
         }
         for (int i = 0; i < 36 * groupNum; i++) {
           clearPathPerGroupScore[i] = 0;
+          clearPathPerGroupNum[i] = 0;
+          pathPenaltyPerGroupScore[i] = 0;
         }
 
         float minObsAngCW = -180.0;
@@ -742,8 +774,8 @@ int main(int argc, char** argv)
               float x2 = cos(rotAng) * x + sin(rotAng) * y;
               float y2 = -sin(rotAng) * x + cos(rotAng) * y;
 
-              float scaleY = x2 / gridVoxelOffsetX + searchRadius / gridVoxelOffsetY 
-                             * (gridVoxelOffsetX - x2) / gridVoxelOffsetX;
+              float scaleY = x2 / gridVoxelOffsetX + searchRadius / gridVoxelOffsetY
+                  * (gridVoxelOffsetX - x2) / gridVoxelOffsetX;
 
               int indX = int((gridVoxelOffsetX + gridVoxelSize / 2 - x2) / gridVoxelSize);
               int indY = int((gridVoxelOffsetY + gridVoxelSize / 2 - y2 / scaleY) / gridVoxelSize);
@@ -763,7 +795,7 @@ int main(int argc, char** argv)
             }
           }
 
-          if (dis < diameter / pathScale && (fabs(x) > vehicleLength / pathScale / 2.0 || fabs(y) > vehicleWidth / pathScale / 2.0) && 
+          if (dis < diameter / pathScale && (fabs(x) > vehicleLength / pathScale / 2.0 || fabs(y) > vehicleWidth / pathScale / 2.0) &&
               (h > obstacleHeightThre || !useTerrainAnalysis) && checkRotObstacle) {
             float angObs = atan2(y, x) * 180.0 / PI;
             if (angObs > 0) {
@@ -791,9 +823,6 @@ int main(int argc, char** argv)
           }
 
           if (clearPathList[i] < pointPerPathThre) {
-            float penaltyScore = 1.0 - pathPenaltyList[i] / costHeightThre;
-            if (penaltyScore < costScore) penaltyScore = costScore;
-
             float dirDiff = fabs(joyDir - endDirPathList[i % pathNum] - (10.0 * rotDir - 180.0));
             if (dirDiff > 360.0) {
               dirDiff -= 360.0;
@@ -805,9 +834,11 @@ int main(int argc, char** argv)
             float rotDirW;
             if (rotDir < 18) rotDirW = fabs(fabs(rotDir - 9) + 1);
             else rotDirW = fabs(fabs(rotDir - 27) + 1);
-            float score = (1 - sqrt(sqrt(dirWeight * dirDiff))) * rotDirW * rotDirW * rotDirW * rotDirW * penaltyScore;
+            float score = (1 - sqrt(sqrt(dirWeight * dirDiff))) * rotDirW * rotDirW * rotDirW * rotDirW;
             if (score > 0) {
               clearPathPerGroupScore[groupNum * rotDir + pathList[i % pathNum]] += score;
+              clearPathPerGroupNum[groupNum * rotDir + pathList[i % pathNum]]++;
+              pathPenaltyPerGroupScore[groupNum * rotDir + pathList[i % pathNum]] += pathPenaltyList[i];
             }
           }
         }
@@ -819,12 +850,23 @@ int main(int argc, char** argv)
           float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
           float rotDeg = 10.0 * rotDir;
           if (rotDeg > 180.0) rotDeg -= 360.0;
-          if (maxScore < clearPathPerGroupScore[i] && ((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) || 
+          if (maxScore < clearPathPerGroupScore[i] && ((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) ||
               (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive) || !checkRotObstacle)) {
             maxScore = clearPathPerGroupScore[i];
             selectedGroupID = i;
           }
         }
+
+        float penaltyScore = 0;
+        if (selectedGroupID >= 0) {
+          if (clearPathPerGroupNum[selectedGroupID] > 0) {
+            penaltyScore = pathPenaltyPerGroupScore[selectedGroupID] / clearPathPerGroupNum[selectedGroupID];
+          }
+        }
+        if (penaltyScore > costHeightThre1) slow.data = 1;
+        else if (penaltyScore > costHeightThre2) slow.data = 2;
+        else slow.data = 0;
+        pubSlowDown.publish(slow);
 
         if (selectedGroupID >= 0) {
           int rotDir = int(selectedGroupID / groupNum);
@@ -853,7 +895,7 @@ int main(int argc, char** argv)
           path.header.frame_id = "vehicle";
           pubPath.publish(path);
 
-          #if PLOTPATHSET == 1
+#if PLOTPATHSET == 1
           freePaths->clear();
           for (int i = 0; i < 36 * pathNum; i++) {
             int rotDir = int(i / pathNum);
@@ -865,9 +907,9 @@ int main(int argc, char** argv)
               angDiff = 360.0 - angDiff;
             }
             if ((angDiff > dirThre && !dirToVehicle) || (fabs(10.0 * rotDir - 180.0) > dirThre && fabs(joyDir) <= 90.0 && dirToVehicle) ||
-                ((10.0 * rotDir > dirThre && 360.0 - 10.0 * rotDir > dirThre) && fabs(joyDir) > 90.0 && dirToVehicle) || 
-                !((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) || 
-                (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive) || !checkRotObstacle)) {
+                ((10.0 * rotDir > dirThre && 360.0 - 10.0 * rotDir > dirThre) && fabs(joyDir) > 90.0 && dirToVehicle) ||
+                !((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) ||
+                    (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive) || !checkRotObstacle)) {
               continue;
             }
 
@@ -925,7 +967,7 @@ int main(int argc, char** argv)
         path.header.frame_id = "vehicle";
         pubPath.publish(path);
 
-        #if PLOTPATHSET == 1
+#if PLOTPATHSET == 1
         freePaths->clear();
         sensor_msgs::PointCloud2 freePaths2;
         pcl::toROSMsg(*freePaths, freePaths2);
